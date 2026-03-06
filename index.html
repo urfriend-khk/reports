@@ -1,0 +1,1846 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>스칼라 저작권료 단가 검토 보고서</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.5.1" integrity="sha384-jb8JQMbMoBUzgWatfe6COACi2ljcDdZQ2OxczGA3bGNeWe+6DChMTBJemed7ZnvJ" crossorigin="anonymous">
+// ─── 내비게이션 스무스 스크롤 ───
+document.querySelectorAll('nav.top-nav a[href^="#"]').forEach(link => {
+  link.addEventListener('click', function(e) {
+    e.preventDefault();
+    const id = this.getAttribute('href').slice(1);
+    const el = document.getElementById(id);
+    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  });
+});
+
+// ════════════════════════════════════════
+// SIMULATOR
+// ════════════════════════════════════════
+(function () {
+  /* 2025 실측 비중 계산 (2026-03 부분월 제외) */
+  const d25  = MONTHLY.filter(d => d.m.startsWith('2025'));
+  const rAI  = d25.reduce((s,d)=>s+d.ai,0);
+  const rAPDP= d25.reduce((s,d)=>s+d.aipdp,0);
+  const rPDP = d25.reduce((s,d)=>s+d.pdp,0);
+  const rAll = rAI + rAPDP + rPDP;
+  const pAI  = rAI   / rAll;
+  const pAPDP= rAPDP / rAll;
+  const pPDP = rPDP  / rAll;
+
+  /* 라벨 업데이트 */
+  document.getElementById('sr-ai').innerHTML    = `<code>ai_response_cnt</code> &nbsp;|&nbsp; 실측 비중 <strong>${(pAI*100).toFixed(1)}%</strong>`;
+  document.getElementById('sr-aipdp').innerHTML = `<code>ai_linked_pdp_view_cnt</code> &nbsp;|&nbsp; 실측 비중 <strong>${(pAPDP*100).toFixed(1)}%</strong>`;
+  document.getElementById('sr-pdp').innerHTML   = `<code>total_pdp_view_cnt</code> &nbsp;|&nbsp; 실측 비중 <strong>${(pPDP*100).toFixed(1)}%</strong>`;
+
+  const SCENARIO_RATES = { p25: P25, median: MEDIAN, p75: P75 };
+  const SCENARIO_NAMES = { p25:'보수(1,849건)', median:'기준(2,235건)', p75:'낙관(3,980건)' };
+  let curScenario = 'median';
+
+  /* 시나리오 전환 */
+  window.simScenario = function (s) {
+    curScenario = s;
+    ['p25','median','p75'].forEach(k => {
+      document.getElementById('stab-'+k).classList.toggle('active', k === s);
+    });
+    simUpdate();
+  };
+
+  /* 투영 함수 (항목별 단가) */
+  function projSim(n, rate, effP) {
+    return avgBooks(n) * rate * 12 * effP;
+  }
+
+  /* Chart 초기화 */
+  const years = Array.from({length:13}, (_,i) => 2026+i);
+  const simCtx = document.getElementById('sim-chart').getContext('2d');
+  const simChartObj = new Chart(simCtx, {
+    type: 'line',
+    data: {
+      labels: years,
+      datasets: [
+        { label:'보수 (1,849건)', data:[], borderColor:'#059669', backgroundColor:'#05966920', borderWidth:2, pointRadius:3, tension:0.3 },
+        { label:'기준 (2,235건)', data:[], borderColor:'#2563eb', backgroundColor:'#2563eb20', borderWidth:2.5, pointRadius:4, tension:0.3 },
+        { label:'낙관 (3,980건)', data:[], borderColor:'#dc2626', backgroundColor:'#dc262620', borderWidth:2, pointRadius:3, tension:0.3 },
+        { label:'6.5억 기준선',   data:years.map(()=>6.5), borderColor:'#dc2626', borderWidth:1.5, borderDash:[6,4], pointRadius:0 },
+      ]
+    },
+    options: {
+      responsive: true,
+      plugins: { legend:{ position:'bottom' } },
+      scales: {
+        y: { title:{ display:true, text:'연간 저작권료 (억원)' }, beginAtZero:true, ticks:{ callback: v => v.toFixed(1)+'억' } }
+      }
+    }
+  });
+
+  /* 메인 업데이트 함수 */
+  window.simUpdate = function () {
+    const priceAI    = +document.getElementById('sl-ai').value;
+    const priceAIPDP = +document.getElementById('sl-aipdp').value;
+    const pricePDP   = +document.getElementById('sl-pdp').value;
+
+    /* 슬라이더 값 표시 */
+    document.getElementById('sv-ai').textContent    = priceAI    + '원';
+    document.getElementById('sv-aipdp').textContent = priceAIPDP + '원';
+    document.getElementById('sv-pdp').textContent   = pricePDP   + '원';
+
+    /* 가중평균 단가 */
+    const effP = pAI * priceAI + pAPDP * priceAIPDP + pPDP * pricePDP;
+    document.getElementById('sim-eff').textContent   = effP.toFixed(1) + '원';
+    document.getElementById('sim-eff-sub').textContent =
+      `AI ${(pAI*100).toFixed(1)}%×${priceAI} + AI연결 ${(pAPDP*100).toFixed(1)}%×${priceAIPDP} + 리서치 ${(pPDP*100).toFixed(1)}%×${pricePDP}`;
+
+    const rate = SCENARIO_RATES[curScenario];
+
+    /* KPI 계산 */
+    const r2026 = projSim(0, rate, effP);
+    const r2035 = projSim(9, rate, effP);
+    const ratio  = r2035 / BUDGET;
+
+    /* 초과 연도 */
+    let crossover = null;
+    for (let n = 0; n <= 29; n++) {
+      if (projSim(n, rate, effP) >= BUDGET) { crossover = 2026 + n; break; }
+    }
+
+    /* KPI 카드 업데이트 */
+    const fmtOk = v => (v / 1e8).toFixed(2) + '억원';
+
+    document.getElementById('sv-2026').textContent = fmtOk(r2026);
+    document.getElementById('ss-2026').textContent = `${SCENARIO_NAMES[curScenario]} 시나리오`;
+
+    if (crossover) {
+      const urgency = crossover <= 2028 ? 'dngr' : crossover <= 2032 ? 'warn' : '';
+      document.getElementById('sk-exceed').className = 'sim-kpi ' + urgency;
+      document.getElementById('sv-exceed').textContent = crossover + '년';
+      document.getElementById('ss-exceed').textContent = crossover <= 2028 ? '⚠️ 2년 내 초과'
+                                                       : crossover <= 2035 ? '⚡ 10년 이내'
+                                                                           : '✅ 10년 이후';
+    } else {
+      document.getElementById('sk-exceed').className = 'sim-kpi ok';
+      document.getElementById('sv-exceed').textContent = '>2055년';
+      document.getElementById('ss-exceed').textContent = '✅ 안전권';
+    }
+
+    document.getElementById('sv-2035').textContent = fmtOk(r2035);
+    const ratioKpi = document.getElementById('sk-ratio');
+    ratioKpi.className = 'sim-kpi ' + (ratio >= 1 ? 'dngr' : ratio >= 0.8 ? 'warn' : 'ok');
+    document.getElementById('sv-ratio').textContent = (ratio * 100).toFixed(1) + '%';
+    document.getElementById('ss-ratio').textContent = ratio >= 1 ? '⚠️ 예산 초과' : ratio >= 0.8 ? '⚡ 위험 수위' : '✅ 예산 내';
+
+    /* 차트 업데이트: 세 시나리오 모두 표시 */
+    simChartObj.data.datasets[0].data = years.map((_,n) => projSim(n, P25,    effP) / 1e8);
+    simChartObj.data.datasets[1].data = years.map((_,n) => projSim(n, MEDIAN, effP) / 1e8);
+    simChartObj.data.datasets[2].data = years.map((_,n) => projSim(n, P75,    effP) / 1e8);
+    document.getElementById('sim-chart-note').textContent =
+      `세 시나리오 비교 · 가중평균 단가 ${effP.toFixed(1)}원 적용`;
+    simChartObj.update();
+
+    /* 비교 매트릭스 */
+    const mYears = [2027, 2028, 2030, 2035];
+    const scenarios = [
+      { key:'p25',    rate:P25,    name:'보수 (1,849건)' },
+      { key:'median', rate:MEDIAN, name:'기준 (2,235건)' },
+      { key:'p75',    rate:P75,    name:'낙관 (3,980건)' },
+    ];
+    const tbody = document.getElementById('sim-matrix-body');
+    tbody.innerHTML = '';
+    scenarios.forEach(sc => {
+      /* crossover for this scenario */
+      let cx = null;
+      for (let n = 0; n <= 29; n++) {
+        if (projSim(n, sc.rate, effP) >= BUDGET) { cx = 2026+n; break; }
+      }
+      const cxTxt = cx ? cx+'년' : '>2055년';
+
+      const cells = mYears.map(yr => {
+        const n = yr - 2026;
+        const v = projSim(n, sc.rate, effP);
+        const pct = (v / BUDGET * 100).toFixed(0);
+        const cls = v >= BUDGET ? 'ov' : v >= BUDGET*0.8 ? 'md' : 'sf';
+        return `<td class="${cls}">${(v/1e8).toFixed(2)}억<br><span style="font-size:10px;font-weight:400">${pct}%</span></td>`;
+      });
+      const cxCls = cx && cx <= 2030 ? 'ov' : cx && cx <= 2035 ? 'md' : 'sf';
+      tbody.innerHTML += `<tr>
+        <td style="font-weight:600;white-space:nowrap">${sc.name}</td>
+        <td style="font-weight:700;color:var(--accent)">${effP.toFixed(1)}원</td>
+        ${cells.join('')}
+        <td class="${cxCls}" style="font-weight:700">${cxTxt}</td>
+      </tr>`;
+    });
+  };
+
+  /* 초기 렌더 */
+  simUpdate();
+}());
+
+</script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --primary: #1e3a5f;
+      --accent: #2563eb;
+      --accent-light: #dbeafe;
+      --warn: #d97706;
+      --warn-light: #fef3c7;
+      --danger: #dc2626;
+      --danger-light: #fee2e2;
+      --success: #059669;
+      --success-light: #dcfce7;
+      --border: #e5e7eb;
+      --bg: #f8fafc;
+      --card: #ffffff;
+      --text: #1f2937;
+      --muted: #6b7280;
+    }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans KR', Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      font-size: 15px;
+      line-height: 1.75;
+    }
+
+    /* ── Sticky nav ── */
+    nav.top-nav {
+      position: sticky; top: 0; z-index: 100;
+      background: var(--primary); color: white;
+      display: flex; align-items: center; gap: 4px;
+      padding: 0 20px; height: 46px;
+      overflow-x: auto; white-space: nowrap;
+      font-size: 13px;
+    }
+    nav.top-nav .nav-brand { font-weight: 700; margin-right: 12px; flex-shrink: 0; }
+    nav.top-nav a { color: rgba(255,255,255,.75); text-decoration: none; padding: 4px 9px; border-radius: 4px; transition: .15s; flex-shrink: 0; }
+    nav.top-nav a:hover { background: rgba(255,255,255,.12); color: white; }
+    nav.top-nav .sep { color: rgba(255,255,255,.3); }
+
+    /* ── Layout ── */
+    .wrap { max-width: 980px; margin: 0 auto; padding: 40px 24px 80px; }
+
+    /* ── Cover ── */
+    .cover {
+      background: linear-gradient(135deg, var(--primary) 0%, #2a5298 100%);
+      color: white; border-radius: 12px; padding: 44px 48px; margin-bottom: 36px;
+    }
+    .cover .badge { display: inline-block; background: rgba(255,255,255,.15); padding: 3px 12px; border-radius: 20px; font-size: 12px; margin-bottom: 14px; }
+    .cover h1 { font-size: 26px; font-weight: 800; line-height: 1.3; margin-bottom: 10px; }
+    .cover .subtitle { color: rgba(255,255,255,.78); font-size: 14px; max-width: 640px; }
+    .cover .meta { margin-top: 24px; padding-top: 18px; border-top: 1px solid rgba(255,255,255,.2); display: flex; flex-wrap: wrap; gap: 24px; font-size: 12px; color: rgba(255,255,255,.55); }
+
+    /* ── KPI row ── */
+    .kpi-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-bottom: 40px; }
+    .kpi { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 18px 20px; }
+    .kpi.accent  { border-color: var(--accent); background: #eff6ff; }
+    .kpi.warning { border-color: var(--warn);   background: #fffbeb; }
+    .kpi.danger  { border-color: var(--danger);  background: #fff1f2; }
+    .kpi-lbl { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .5px; color: var(--muted); margin-bottom: 5px; }
+    .kpi-val { font-size: 24px; font-weight: 800; color: var(--text); }
+    .kpi.accent  .kpi-val { color: var(--accent); }
+    .kpi.warning .kpi-val { color: var(--warn); }
+    .kpi.danger  .kpi-val { color: var(--danger); }
+    .kpi-sub { font-size: 12px; color: var(--muted); margin-top: 3px; }
+
+    /* ── Section ── */
+    .section { margin-bottom: 60px; scroll-margin-top: 56px; }
+    .section-hd { display: flex; align-items: flex-start; gap: 14px; margin-bottom: 18px; }
+    .step-num {
+      width: 38px; height: 38px; border-radius: 50%; flex-shrink: 0;
+      background: var(--accent); color: white;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 15px; font-weight: 800; margin-top: 2px;
+    }
+    .step-num.bg-dark { background: var(--primary); }
+    .step-num.bg-muted { background: var(--muted); }
+    .section-title { font-size: 21px; font-weight: 800; color: var(--primary); }
+    .section-desc  { font-size: 13px; color: var(--muted); margin-top: 2px; }
+    .section p { color: #374151; margin-bottom: 12px; }
+    .section ul { padding-left: 20px; }
+    .section li { color: #374151; margin-bottom: 6px; }
+
+    /* ── Card ── */
+    .card { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 22px 24px; margin-bottom: 18px; }
+    .card h4 { font-size: 14px; font-weight: 700; color: var(--text); margin-bottom: 12px; }
+
+    /* ── Callout ── */
+    .callout { border-radius: 8px; padding: 14px 18px; margin: 18px 0; border-left: 4px solid; }
+    .callout.info    { background: var(--accent-light); border-color: var(--accent); }
+    .callout.warning { background: var(--warn-light);   border-color: var(--warn); }
+    .callout.success { background: var(--success-light); border-color: var(--success); }
+    .callout.danger  { background: var(--danger-light); border-color: var(--danger); }
+    .callout .c-title { font-weight: 700; font-size: 14px; margin-bottom: 4px; }
+    .callout p { font-size: 14px; margin-bottom: 0; color: #374151; }
+
+    /* ── Formula box ── */
+    .formula { background: #f1f5f9; border-radius: 6px; padding: 14px 20px; font-family: 'Courier New', monospace; font-size: 14px; color: var(--primary); text-align: center; margin: 16px 0; font-weight: 600; }
+
+    /* ── Chart ── */
+    .chart-box { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 22px 24px; margin-bottom: 18px; }
+    .chart-box h4 { font-size: 14px; font-weight: 700; margin-bottom: 3px; }
+    .chart-box .chart-note { font-size: 12px; color: var(--muted); margin-bottom: 16px; }
+    .chart-box canvas { max-height: 300px; }
+    .chart-box canvas.h360 { max-height: 360px; }
+    .chart-box canvas.h460 { max-height: 460px; }
+
+    /* ── Grid ── */
+    .g2 { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+    .g2-wide { display: grid; grid-template-columns: 3fr 2fr; gap: 18px; }
+
+    /* ── Table ── */
+    .tbl { width: 100%; border-collapse: collapse; font-size: 13px; }
+    .tbl thead th { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .5px; color: var(--muted); padding: 8px 10px; border-bottom: 2px solid var(--border); white-space: nowrap; }
+    .tbl tbody td { padding: 8px 10px; border-bottom: 1px solid #f3f4f6; vertical-align: middle; }
+    .tbl tbody tr:last-child td { border-bottom: none; }
+    .tbl tbody tr:hover { background: #fafafa; }
+    .tbl .r { text-align: right; font-variant-numeric: tabular-nums; }
+    .tbl .bold { font-weight: 700; }
+
+    /* ── Badge ── */
+    .tag { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 700; }
+    .tag.red  { background: #fee2e2; color: #991b1b; }
+    .tag.yel  { background: #fef3c7; color: #92400e; }
+    .tag.grn  { background: #dcfce7; color: #166534; }
+    .tag.pur  { background: #ede9fe; color: #5b21b6; }
+    .tag.blue { background: #dbeafe; color: #1e40af; }
+    .tag.over { background: #fee2e2; color: #991b1b; }
+    .tag.safe { background: #dcfce7; color: #166534; }
+
+    /* ── Matrix table ── */
+    .matrix { width: 100%; border-collapse: collapse; font-size: 13px; }
+    .matrix th { text-align: center; padding: 10px 14px; background: #f3f4f6; font-size: 12px; font-weight: 700; border: 1px solid var(--border); }
+    .matrix td { text-align: center; padding: 9px 14px; border: 1px solid var(--border); }
+    .matrix .price-col { font-weight: 700; background: #f9fafb; }
+    .matrix .m-over    { background: #fee2e2; color: #991b1b; font-weight: 700; }
+    .matrix .m-mid     { background: #fef3c7; color: #92400e; font-weight: 700; }
+    .matrix .m-safe    { background: #dcfce7; color: #166534; font-weight: 700; }
+
+    /* ── Flow indicators ── */
+    .flow { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin: 14px 0; }
+    .flow-item { background: var(--accent-light); color: var(--accent); padding: 5px 14px; border-radius: 20px; font-size: 13px; font-weight: 600; }
+    .flow-arrow { color: var(--muted); font-size: 20px; }
+
+    /* ── Divider ── */
+    hr.divider { border: none; border-top: 1px solid var(--border); margin: 48px 0; }
+
+    /* ── Conclusion ── */
+    .conc-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-top: 20px; }
+    .conc-item { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 20px; }
+    .conc-label { font-size: 11px; font-weight: 700; text-transform: uppercase; color: var(--accent); margin-bottom: 6px; }
+    .conc-item h4 { font-size: 15px; font-weight: 700; margin-bottom: 8px; }
+    .conc-item p { font-size: 13px; color: var(--muted); margin-bottom: 0; }
+
+    /* ── Footer ── */
+    footer { text-align: center; padding: 36px 0; font-size: 12px; color: var(--muted); border-top: 1px solid var(--border); margin-top: 20px; }
+
+    @media (max-width: 680px) {
+      .cover { padding: 28px 24px; }
+      .kpi-row, .g2, .g2-wide, .conc-grid { grid-template-columns: 1fr 1fr; }
+    }
+    @media (max-width: 480px) {
+      .kpi-row { grid-template-columns: 1fr; }
+      .g2, .g2-wide, .conc-grid { grid-template-columns: 1fr; }
+    }
+    @media print {
+      nav.top-nav { display: none; }
+      .section { break-inside: avoid; }
+    }
+
+    /* ════ PASSWORD GATE ════ */
+    #gate {
+      position: fixed; inset: 0; z-index: 9999;
+      background: linear-gradient(135deg, #1e3a5f 0%, #2a5298 100%);
+      display: flex; align-items: center; justify-content: center;
+    }
+    .gate-box {
+      background: white; border-radius: 16px;
+      padding: 44px 48px; width: 100%; max-width: 420px;
+      text-align: center; box-shadow: 0 24px 60px rgba(0,0,0,.4);
+    }
+    .gate-logo  { font-size: 40px; margin-bottom: 8px; }
+    .gate-title { font-size: 21px; font-weight: 800; color: #1e3a5f; margin-bottom: 4px; }
+    .gate-sub   { font-size: 13px; color: #6b7280; margin-bottom: 30px; line-height: 1.6; }
+    .gate-label { font-size: 12px; font-weight: 700; color: #374151; text-align: left; margin-bottom: 6px; }
+    .gate-input {
+      width: 100%; padding: 13px 14px; border: 2px solid #e5e7eb;
+      border-radius: 8px; font-size: 16px; letter-spacing: 3px;
+      outline: none; transition: border-color .2s; text-align: center;
+    }
+    .gate-input:focus  { border-color: #2563eb; }
+    .gate-input.error  { border-color: #dc2626; animation: shake .3s; }
+    @keyframes shake {
+      0%,100% { transform: translateX(0); }
+      25%      { transform: translateX(-7px); }
+      75%      { transform: translateX(7px); }
+    }
+    .gate-err {
+      font-size: 12px; color: #dc2626; margin-top: 6px;
+      min-height: 18px; text-align: left;
+    }
+    .gate-btn {
+      width: 100%; padding: 14px; margin-top: 20px;
+      background: #2563eb; color: white; border: none;
+      border-radius: 8px; font-size: 15px; font-weight: 700;
+      cursor: pointer; transition: background .15s;
+    }
+    .gate-btn:hover { background: #1d4ed8; }
+    .gate-hint { font-size: 11px; color: #9ca3af; margin-top: 16px; }
+  </style>
+</head>
+<body>
+
+<!-- ════ PASSWORD GATE ════ -->
+<div id="gate">
+  <div class="gate-box">
+    <div class="gate-logo">📑</div>
+    <div class="gate-title">스칼라 단가 검토 보고서</div>
+    <div class="gate-sub">사법행정학회 내부 자료입니다.<br>열람 권한이 있는 경우에만 접속해 주세요.</div>
+    <div class="gate-label">액세스 코드</div>
+    <input type="password" id="pw-input" class="gate-input"
+      placeholder="••••••••"
+      onkeydown="if(event.key==='Enter') gateUnlock()"
+      autocomplete="off">
+    <div class="gate-err" id="pw-err"></div>
+    <button class="gate-btn" onclick="gateUnlock()">열람하기 →</button>
+    <div class="gate-hint">※ 이 보고서는 내부 관계자 전용입니다</div>
+  </div>
+</div>
+
+<!-- ════ REPORT BODY (hidden until auth) ════ -->
+<div id="report-body" style="display:none">
+
+<!-- ───────────────────────────── NAV ───────────────────────────── -->
+<nav class="top-nav">
+  <span class="nav-brand">📑 Scholar 단가 검토</span>
+  <a href="#s-bg">배경</a><span class="sep">›</span>
+  <a href="#s1">Step 1 현황</a><span class="sep">›</span>
+  <a href="#s2">Step 2 정규화</a><span class="sep">›</span>
+  <a href="#s3">Step 3 모델</a><span class="sep">›</span>
+  <a href="#s4">Step 4 초과 시점</a><span class="sep">›</span>
+  <a href="#s5">Step 5 단가 산정</a><span class="sep">›</span>
+  <a href="#s-conc">결론</a><span class="sep">›</span>
+  <a href="#s-sim">🔧 시뮬레이터</a><span class="sep">›</span>
+  <a href="#s-sim2">📊 분기 정산</a>
+</nav>
+
+<div class="wrap">
+
+  <!-- ── Cover ── -->
+  <div class="cover">
+    <div class="badge">내부 검토용</div>
+    <h1>스칼라 저작권료 단가 검토 보고서</h1>
+    <p class="subtitle">스칼라 저작물 저작권료가 사법행정학회 지불액(6.5억)을 넘지 않도록<br>적정 단가를 산정하기 위한 분석</p>
+    <div class="meta">
+      <span>기준일: 2026년 3월</span>
+      <span>데이터: mart_prod.mart_agg.scholar_settlement_dashboard</span>
+      <span>분석 기간: 2025-01 ~ 2026-02 (14개월)</span>
+    </div>
+  </div>
+
+  <!-- ── Executive Summary ── -->
+  <div class="card" style="margin-bottom:32px; border-left:4px solid var(--accent); background:#f8fafc;">
+    <h3 style="font-size:16px; margin-bottom:16px; color:var(--primary)">📋 요약 (Executive Summary)</h3>
+
+    <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:20px; font-size:13.5px; line-height:1.7">
+      <div>
+        <div style="font-weight:700; color:var(--accent); margin-bottom:6px; font-size:12px; text-transform:uppercase; letter-spacing:.5px">▸ 검토 배경 및 요청 사항</div>
+        <p>lbox는 스칼라 플랫폼에 등재된 저작물에 대해 사용량(AI 이용수, 원문 열람수 등)에 따라 저자에게 저작권료를 지급합니다. 이 비용이 <strong>사법행정학회 전체 계약에 지불하는 연간 금액(약 6.5억원)</strong>을 초과하지 않는 수준으로 단가를 설계해달라는 요청입니다. 현재 단가는 항목별 250원이며, 저작물은 연간 약 40종씩 누적 등재됩니다.</p>
+        <p style="margin-top:8px;font-size:12px;color:var(--muted)">※ 이 대시보드는 스칼라 저작물만 포함하며, 사법행정학회 전체 계약 비용은 별도입니다.</p>
+      </div>
+      <div>
+        <div style="font-weight:700; color:var(--accent); margin-bottom:6px; font-size:12px; text-transform:uppercase; letter-spacing:.5px">▸ 분석 방법론</div>
+        <ol style="padding-left:16px; margin:0">
+          <li><strong>실측 데이터 집계</strong>: 2025-01~2026-02, 14개월치 월별 사용량 분석</li>
+          <li><strong>종당 월평균 정규화</strong>: 저작물마다 등재 시점이 달라, 실제 경과 <strong>일수</strong>로 나눈 뒤 30.4375를 곱해 월 환산 (DATEDIFF 활용, 개월 단위 시 등재일 내 편차 왜곡 방지)</li>
+          <li><strong>이상치 처리</strong>: BFL(서울논문학회, 분석 제외) 및 수사실무사례(이상치) 제외 후 중앙값 <strong>2,235건/종/월</strong>을 기준값으로 채택</li>
+          <li><strong>시나리오 투영</strong>: 보수(1,849건), 기준(2,235건), 낙관(3,980건) 3개 시나리오로 2026~2035 연간 비용 추정</li>
+        </ol>
+      </div>
+      <div>
+        <div style="font-weight:700; color:var(--accent); margin-bottom:6px; font-size:12px; text-transform:uppercase; letter-spacing:.5px">▸ 결론</div>
+        <p>현행 단가 <strong>250원을 유지하면 2028년(기준 시나리오)에 6.5억을 초과</strong>합니다. 2027년 말에 이미 예산의 98.4%에 도달하므로 사실상 2027년이 임계점입니다.</p>
+        <p style="margin-top:8px">10년 버퍼(2035년까지 미초과)를 확보하려면 단가를 <strong style="color:var(--success)">60원 이하(기준 시나리오)</strong>로 설정해야 합니다. 낙관 시나리오(고성장)에서는 <strong>34원 이하</strong>가 필요합니다.</p>
+        <div style="margin-top:10px; padding:8px 12px; background:var(--warn-light); border-radius:6px; font-size:12px; color:#92400e">
+          <strong>권고안:</strong> 60원 일괄 적용 또는 등재 종수 연동 단가 구조 도입
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── KPI Summary ── -->
+  <div class="kpi-row">
+    <div class="kpi">
+      <div class="kpi-lbl">현재 등재 저작물</div>
+      <div class="kpi-val">18종</div>
+      <div class="kpi-sub">2026년 3월 기준 (BFL 제외)</div>
+    </div>
+    <div class="kpi">
+      <div class="kpi-lbl">2025년 연간 저작권료</div>
+      <div class="kpi-val">7,976만원</div>
+      <div class="kpi-sub">단가 250원 / 총 319,050건 (BFL 제외)</div>
+    </div>
+    <div class="kpi warning">
+      <div class="kpi-lbl">6.5억 초과 예상 (기준 시나리오)</div>
+      <div class="kpi-val">2028년</div>
+      <div class="kpi-sub">단가 250원 · 2,235건/종/월 가정 시</div>
+    </div>
+    <div class="kpi accent">
+      <div class="kpi-lbl">10년 버퍼 조건 최대 단가</div>
+      <div class="kpi-val">60원</div>
+      <div class="kpi-sub">중앙값(2,235건) 기준 역산</div>
+    </div>
+  </div>
+
+  <!-- ═══════════════ 배경 ═══════════════ -->
+  <div class="section" id="s-bg">
+    <div class="section-hd">
+      <div class="step-num bg-muted" style="font-size:13px">배경</div>
+      <div>
+        <div class="section-title">검토 배경 및 목적</div>
+        <div class="section-desc">왜 이 분석이 필요한가</div>
+      </div>
+    </div>
+
+    <div class="g2-wide" style="align-items:start">
+      <div class="card" style="margin-bottom:0">
+        <h4>현행 단가 구조</h4>
+        <table class="tbl">
+          <thead><tr><th>지표</th><th>컬럼명</th><th class="r">단가</th></tr></thead>
+          <tbody>
+            <tr><td>AI 이용수</td><td style="font-family:monospace;font-size:12px">ai_response_cnt</td><td class="r bold">250원</td></tr>
+            <tr><td>AI 원문 연결수</td><td style="font-family:monospace;font-size:12px">ai_linked_pdp_view_cnt</td><td class="r bold">250원</td></tr>
+            <tr><td>원문 열람수</td><td style="font-family:monospace;font-size:12px">total_pdp_view_cnt</td><td class="r bold">250원</td></tr>
+          </tbody>
+        </table>
+        <div style="margin-top:14px;padding-top:12px;border-top:1px solid #f3f4f6">
+          <p style="font-size:13px;color:var(--muted);margin-bottom:0">지급액 = (AI이용수 + AI원문연결수 + 원문열람수) × 250원</p>
+        </div>
+      </div>
+      <div>
+        <div style="padding:12px 16px; background:#fef9c3; border-left:3px solid #d97706; border-radius:0 6px 6px 0; margin-bottom:14px; font-size:13px">
+          <strong>⚠ 범위 주의:</strong> 이 대시보드는 <strong>스칼라 플랫폼 저작물만</strong> 집계합니다.
+          사법행정학회 전체 계약 비용(연간 약 6.5억원)은 <strong>별도 계약</strong>이며,
+          이 분석에서는 스칼라 저작권료가 해당 금액을 넘지 않도록 하는 것이 목표입니다.
+        </div>
+        <p>lbox는 사법행정학회와 별도로 연간 <strong>약 6억 5천만원</strong>의 저작권료 계약을 유지하고 있습니다. 스칼라 플랫폼에서 발생하는 저작권료(이 대시보드 기준)가 그 금액을 초과하지 않도록 단가를 관리하고자 합니다.</p>
+        <p>스칼라에 등재되는 저작물이 <strong>연간 약 40종씩 누적</strong>된다고 가정할 때, 다음 두 가지를 검토합니다.</p>
+        <ul>
+          <li><strong>언제</strong> 6.5억 기준을 초과하는가 (단가 250원 기준)</li>
+          <li>초과 시점이 <strong>최소 10년 이후</strong>가 되도록 하는 단가는 얼마인가</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <hr class="divider">
+
+  <!-- ═══════════════ STEP 1 ═══════════════ -->
+  <div class="section" id="s1">
+    <div class="section-hd">
+      <div class="step-num">1</div>
+      <div>
+        <div class="section-title">현재 사용 현황 파악</div>
+        <div class="section-desc">실측 데이터로 현재 규모와 성장 추세를 확인합니다</div>
+      </div>
+    </div>
+
+    <p>2025년 1월 서비스 개시 이후 14개월간의 월별 사용 데이터입니다. 세 지표(AI 이용수 · AI 원문 연결수 · 원문 열람수)를 합산한 총 사용 건수와, 단가 250원을 적용한 월별 저작권료를 함께 확인합니다.</p>
+
+    <div class="chart-box">
+      <h4>📊 월별 사용 건수 및 저작권료 추이 (2025.01 ~ 2026.02)</h4>
+      <p class="chart-note">막대: 지표별 사용 건수 (스택) &nbsp;|&nbsp; 꺾은선: 월별 저작권료(만원, 우축)</p>
+      <canvas id="chart-monthly" class="h360"></canvas>
+    </div>
+
+    <div class="callout info">
+      <div class="c-title">📈 성장 패턴 관찰</div>
+      <p>서비스 초기(2025년 1~3월)에는 월 수백 건 수준이었으나, <strong>2025년 4월부터 급격한 성장</strong>이 시작되어 12월과 2026년 1월에는 월 10만 건을 돌파했습니다. 이 성장은 두 가지가 복합된 결과입니다. (1) <strong>등재 종수 증가</strong>: 5종(초기) → 18종(2026년) (2) <strong>종당 사용량 증가</strong>: 플랫폼 이용자 확대. 2025년 연간 총 저작권료는 <strong>단가 250원 기준 약 7,976만원</strong>으로, 6.5억 대비 약 12.3% 수준입니다. (BFL 제외)</p>
+    </div>
+
+    <div class="card">
+      <h4>월별 상세 수치</h4>
+      <div style="overflow-x:auto">
+        <table class="tbl" id="monthly-tbl">
+          <thead>
+            <tr>
+              <th>월</th>
+              <th class="r">등재 종수</th>
+              <th class="r">AI 이용수</th>
+              <th class="r">AI 원문 연결</th>
+              <th class="r">원문 열람수</th>
+              <th class="r">월 합계</th>
+              <th class="r">월 저작권료</th>
+            </tr>
+          </thead>
+          <tbody id="monthly-tbody"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <hr class="divider">
+
+  <!-- ═══════════════ STEP 2 ═══════════════ -->
+  <div class="section" id="s2">
+    <div class="section-hd">
+      <div class="step-num">2</div>
+      <div>
+        <div class="section-title">종별 사용량 정규화 방법론</div>
+        <div class="section-desc">등재 시점이 다른 저작물을 어떻게 동등하게 비교할 것인가</div>
+      </div>
+    </div>
+
+    <p>미래 저작권료를 예측하려면 <strong>"저작물 한 종이 월 평균 얼마나 사용되는가"</strong>를 먼저 파악해야 합니다. 그런데 단순 평균을 쓰면 문제가 생깁니다.</p>
+
+    <div class="callout warning">
+      <div class="c-title">⚠️ 단순 평균의 한계: 왜 왜곡이 생기는가</div>
+      <p><strong>예시.</strong> 2025년 10월에 등재된 <em>수사실무사례</em>는 12월 말까지 불과 <strong>3개월</strong>만 운영됐습니다. 그런데 "2025년 총 사용량 ÷ 연말 종수(13종) ÷ 12개월"로 계산하면, 이 저작물의 실제 활동 기간과 무관한 숫자가 나옵니다. 반대로 1월부터 있던 저작물은 운영 기간이 실제보다 짧게 반영될 수 있습니다.</p>
+    </div>
+
+    <p><strong>해결책:</strong> 각 저작물의 실제 운영 기간을 분모로 씁니다.</p>
+
+    <div class="callout info" style="margin-bottom:14px;padding:14px 16px">
+      <div class="c-title">📅 왜 "월" 단위가 아닌 "일" 단위로 계산하는가</div>
+      <p style="font-size:13px">월 단위(MONTHS_BETWEEN)로 계산하면 <strong>1월 1일 등재 = 1월 31일 등재 = "1개월"</strong>로 취급됩니다. 실제로 1월 26일에 등재된 저작물은 2월 말까지 35일만 운영됐지만, 월 기준으로는 2개월로 잡혀 사용량이 절반으로 과소 추정됩니다. 일 기준으로 정확히 계산하면 이런 왜곡을 제거할 수 있습니다.</p>
+    </div>
+
+    <div class="formula">
+      종당 일 평균 사용량 = 총 사용량 ÷ 경과 일수<br>
+      종당 <strong>월</strong> 평균 사용량 = 일 평균 × 30.4375 (= 365.25 ÷ 12)
+    </div>
+
+    <div class="flow">
+      <div class="flow-item">등재 첫날 확인</div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-item">경과 일수 산출<br><small style="color:#6b7280">(첫날~어제)</small></div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-item">총 사용량 ÷ 경과 일수</div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-item">× 30.4375<br>→ 월 평균</div>
+    </div>
+
+    <div class="chart-box">
+      <h4>📊 종별 정규화된 월 평균 사용량 (일 기준 정규화, 어제 기준)</h4>
+      <p class="chart-note">정렬: 낮은 순 → 높은 순 &nbsp;|&nbsp; ⚠ 표시: 관측 기간이 짧아 과대 추정 가능성 있는 이상치</p>
+      <canvas id="chart-books" class="h460"></canvas>
+    </div>
+
+    <div class="g2" style="align-items:start">
+      <div class="chart-box" style="margin-bottom:0">
+        <h4>📊 19종 분포 (이상치 포함)</h4>
+        <p class="chart-note">중앙값(파란 점선) · P25/P75(초록·주황 점선)</p>
+        <canvas id="chart-dist"></canvas>
+      </div>
+      <div class="card" style="margin-bottom:0">
+        <h4>분포 통계 요약</h4>
+        <table class="tbl">
+          <tbody>
+            <tr><td>전체 종 수</td><td class="r bold">19종</td></tr>
+            <tr><td>최솟값 (상속세 법리와 해설)</td><td class="r">307건/월</td></tr>
+            <tr><td>P25 (하위 25%)</td><td class="r">1,849건/월</td></tr>
+            <tr style="background:#eff6ff"><td><strong>중앙값 (P50)</strong></td><td class="r bold">2,235건/월</td></tr>
+            <tr><td>P75 (상위 25%)</td><td class="r">3,980건/월</td></tr>
+            <tr><td>평균 (이상치 2종 제외)</td><td class="r">2,718건/월</td></tr>
+            <tr><td>최댓값 (수사실무사례)</td><td class="r" style="color:var(--danger)">21,760건/월 ⚠</td></tr>
+          </tbody>
+        </table>
+        <div class="callout info" style="margin-top:14px;padding:12px 14px">
+          <p style="font-size:13px">수사실무사례(이상치)를 제외하면 <strong>중앙값 2,235건/종/월, 평균 2,718건/종/월</strong>입니다. 일 기준 정규화로 등재 시점의 차이가 정확히 반영되었습니다. 이후 분석의 <strong>기준값으로 중앙값 2,235건/종/월</strong>을 사용합니다.</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:18px">
+      <h4>종별 정규화 상세 데이터</h4>
+      <div style="overflow-x:auto">
+        <table class="tbl">
+          <thead>
+            <tr>
+              <th>저작물</th>
+              <th>등재월</th>
+              <th class="r">경과 개월</th>
+              <th class="r">총 사용량</th>
+              <th class="r">월 평균</th>
+              <th style="text-align:center">구간</th>
+            </tr>
+          </thead>
+          <tbody id="books-tbody"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <hr class="divider">
+
+  <!-- ═══════════════ STEP 3 ═══════════════ -->
+  <div class="section" id="s3">
+    <div class="section-hd">
+      <div class="step-num">3</div>
+      <div>
+        <div class="section-title">미래 사용량 추정 모델</div>
+        <div class="section-desc">어떤 가정으로 미래를 예측할 것인가</div>
+      </div>
+    </div>
+
+    <p>정규화된 종당 월 평균 사용량을 바탕으로, 저작물 수가 연간 40종씩 누적될 때 미래 저작권료를 추정하는 모델을 설계합니다.</p>
+
+    <div class="card">
+      <h4>📐 모델 구조 및 가정</h4>
+
+      <div class="g2" style="margin-bottom:0">
+        <div>
+          <p><strong>① 누적 등재 종수 (선형 증가)</strong></p>
+          <div class="formula" style="font-size:13px;text-align:left;padding:12px 16px">
+            연도 Y의 평균 등재 종수<br>
+            = 20 + 40 × (Y − 2026) + 20<br>
+            <span style="font-size:11px;color:var(--muted)">※ "+20"은 연중 균등 등재 가정 시 연평균 보정</span>
+          </div>
+          <p style="font-size:13px;color:#374151">예: 2026년 평균 40종 / 2027년 80종 / 2028년 120종 …</p>
+        </div>
+        <div>
+          <p><strong>② 연간 저작권료 계산식</strong></p>
+          <div class="formula" style="font-size:13px;text-align:left;padding:12px 16px">
+            연간 저작권료<br>
+            = 평균 종수 × 종당 월 사용량 × 12개월 × 단가
+          </div>
+          <p style="font-size:13px;color:#374151">세 가지 사용량 시나리오로 불확실성을 표현합니다.</p>
+        </div>
+      </div>
+
+      <div style="margin-top:18px">
+        <p><strong>③ 시나리오 설정 (실측 분포 기반)</strong></p>
+        <table class="tbl" style="margin-top:8px">
+          <thead><tr><th>시나리오</th><th class="r">종당 월 사용량</th><th>실측 근거</th><th>의미</th></tr></thead>
+          <tbody>
+            <tr>
+              <td><span class="tag grn">보수</span></td>
+              <td class="r bold">1,849건/종/월</td>
+              <td>실측 P25 분위수</td>
+              <td>하위 25% 저작물 수준의 사용률</td>
+            </tr>
+            <tr style="background:#eff6ff">
+              <td><span class="tag blue">기준 (중앙값)</span></td>
+              <td class="r bold">2,235건/종/월</td>
+              <td>실측 중앙값 1,835건 반올림</td>
+              <td>가장 현실적인 중간 추정값</td>
+            </tr>
+            <tr>
+              <td><span class="tag red">낙관</span></td>
+              <td class="r bold">3,980건/종/월</td>
+              <td>실측 P75 분위수</td>
+              <td>상위 25% 저작물 수준의 사용률</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="callout info">
+      <div class="c-title">💡 모델의 주요 가정 및 한계</div>
+      <p>이 모델은 (1) <strong>종당 사용량이 시간이 지나도 일정하게 유지</strong>된다고 가정합니다. 실제로는 플랫폼 성숙에 따라 증가하거나, 종수 증가로 기존 종의 사용량이 분산될 수 있습니다. (2) <strong>신규 40종이 기존 종과 같은 패턴</strong>을 가진다고 가정합니다. (3) 수사실무사례는 관측 기간이 짧아 이상치로 분류하고, BFL은 사법행정학회 외 저작물이므로 분석에서 제외했습니다. <strong>중앙값을 기준</strong>으로 합니다.</p>
+    </div>
+  </div>
+
+  <hr class="divider">
+
+  <!-- ═══════════════ STEP 4 ═══════════════ -->
+  <div class="section" id="s4">
+    <div class="section-hd">
+      <div class="step-num">4</div>
+      <div>
+        <div class="section-title">현재 단가 기준 초과 시점 확인</div>
+        <div class="section-desc">단가 250원을 유지하면 6.5억 예산을 언제 초과하는가</div>
+      </div>
+    </div>
+
+    <p>Step 3의 모델을 적용하여 현행 단가 250원에서 연간 저작권료가 6.5억을 초과하는 시점을 시나리오별로 확인합니다.</p>
+
+    <div class="chart-box">
+      <h4>📊 시나리오별 연간 저작권료 예상 추이 (단가 250원 고정, 2026~2038년)</h4>
+      <p class="chart-note">각 선이 빨간 점선(6.5억 기준선)을 넘는 연도 = 예산 초과 시점</p>
+      <canvas id="chart-projection" class="h360"></canvas>
+    </div>
+
+    <div class="callout warning">
+      <div class="c-title">⚠️ 단가 250원 기준 초과 시점 정리</div>
+      <p>
+        • 낙관 시나리오 (3,980건/종/월): <strong>2027년</strong> 초과 — 불과 1년 후<br>
+        • <strong>기준 시나리오 (2,235건/종/월): 2028년</strong> 초과 ← 핵심 기준<br>
+        • 보수 시나리오 (1,849건/종/월): <strong>2028년</strong> 초과<br>
+        <br>
+        기준 시나리오에서 <strong>2027년 예상 저작권료는 6.39억원으로 예산(6.5억)의 98.4%</strong>에 달합니다. 사실상 2027년이 임계점입니다.
+      </p>
+    </div>
+
+    <div class="card">
+      <h4>📋 기준 시나리오 연도별 상세 (단가 250원 · 2,235건/종/월)</h4>
+      <div style="overflow-x:auto">
+        <table class="tbl">
+          <thead>
+            <tr>
+              <th>연도</th>
+              <th class="r">평균 등재 종수</th>
+              <th class="r">연간 사용량 (건)</th>
+              <th class="r">연간 저작권료</th>
+              <th class="r">6.5억 대비</th>
+              <th style="text-align:center">판정</th>
+            </tr>
+          </thead>
+          <tbody id="proj-tbody"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <hr class="divider">
+
+  <!-- ═══════════════ STEP 5 ═══════════════ -->
+  <div class="section" id="s5">
+    <div class="section-hd">
+      <div class="step-num">5</div>
+      <div>
+        <div class="section-title">10년 버퍼 조건의 적정 단가 산정</div>
+        <div class="section-desc">2036년 이전까지 초과하지 않으려면 단가를 얼마로 해야 하는가</div>
+      </div>
+    </div>
+
+    <p>초과 시점이 2036년 이후가 되도록, 즉 지금부터 <strong>최소 10년의 버퍼</strong>를 확보하는 단가를 역산합니다.</p>
+
+    <div class="formula">
+      최대 허용 단가 = 6.5억원 ÷ (2035년 평균 등재 종수 × 종당 월 사용량 × 12개월)
+    </div>
+
+    <p>2035년에 초과하지 않아야 하므로, 2035년 연간 저작권료 &lt; 6.5억이 되는 최대 단가를 구합니다. 2035년 평균 종수는 20 + 40×9 + 20 = <strong>400종</strong>입니다.</p>
+
+    <div class="chart-box">
+      <h4>📊 단가별 연간 저작권료 추이 (기준 시나리오: 2,235건/종/월)</h4>
+      <p class="chart-note">단가를 낮출수록 초과 시점이 뒤로 밀립니다 &nbsp;|&nbsp; 굵은 파란선(60원)이 10년 버퍼의 임계 단가</p>
+      <canvas id="chart-sensitivity" class="h360"></canvas>
+    </div>
+
+    <div class="card" style="margin-top:4px">
+      <h4>📋 단가별 × 시나리오별 초과 연도 매트릭스</h4>
+      <p style="font-size:13px;color:var(--muted);margin-bottom:12px">🟢 2036년 이후(10년 버퍼 달성) &nbsp;|&nbsp; 🟡 2031~2035년(미달) &nbsp;|&nbsp; 🔴 2030년 이전(위험)</p>
+      <div style="overflow-x:auto">
+        <table class="matrix" id="matrix-tbl">
+          <thead>
+            <tr>
+              <th>단가</th>
+              <th>보수적 (1,849건)</th>
+              <th>기준 (2,235건)</th>
+              <th>낙관적 (3,980건)</th>
+            </tr>
+          </thead>
+          <tbody id="matrix-tbody"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="g2" style="align-items:start;margin-top:4px">
+      <div class="card" style="margin-bottom:0">
+        <h4>10년 버퍼 조건 최대 허용 단가 (2035년 기준)</h4>
+        <table class="tbl">
+          <thead><tr><th>시나리오</th><th class="r">2035년 평균 종수</th><th class="r">최대 허용 단가</th></tr></thead>
+          <tbody>
+            <tr><td><span class="tag grn">보수 (1,849건)</span></td><td class="r">400종</td><td class="r bold">73원</td></tr>
+            <tr style="background:#eff6ff"><td><span class="tag blue">기준 (2,235건)</span></td><td class="r">400종</td><td class="r bold" style="color:var(--accent)">60원</td></tr>
+            <tr><td><span class="tag red">낙관 (3,980건)</span></td><td class="r">400종</td><td class="r bold">34원</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="callout success" style="margin:0;padding:18px 20px;align-self:center">
+        <div class="c-title">✅ 산정 결과 요약</div>
+        <p><strong>기준 시나리오(2,235건):</strong> 단가 <strong style="font-size:18px;color:var(--success)">60원</strong>이 10년 버퍼의 임계점입니다.<br><br>
+        낙관 시나리오(3,980건)까지 안전 마진을 두려면 <strong>단가 40원 이하</strong>가 필요합니다.</p>
+      </div>
+    </div>
+  </div>
+
+  <hr class="divider">
+
+  <!-- ═══════════════ 결론 ═══════════════ -->
+  <div class="section" id="s-conc">
+    <div class="section-hd">
+      <div class="step-num bg-dark" style="font-size:13px">결론</div>
+      <div>
+        <div class="section-title">결론 및 권고사항</div>
+        <div class="section-desc">분석 결과를 바탕으로 한 실행 방향</div>
+      </div>
+    </div>
+
+    <div class="callout danger">
+      <div class="c-title">🚨 핵심 결론</div>
+      <p>현행 단가 250원을 유지할 경우, 기준 시나리오(2,235건/종/월) 기준으로 <strong>약 2년 후인 2028년에 6.5억 예산을 초과</strong>합니다. 2027년 말이 실질 임계점(6.39억, 예산의 98.4%)입니다. 10년 버퍼를 확보하려면 현행 대비 <strong>약 76% 인하(250원 → 60원)</strong>가 필요합니다.</p>
+    </div>
+
+    <div class="conc-grid">
+      <div class="conc-item">
+        <div class="conc-label">옵션 A</div>
+        <h4>단가 일괄 인하</h4>
+        <p>단가를 60원(기준) ~ 40원(낙관 대비 안전마진)으로 일괄 인하. 단순하고 투명하지만, 저자 수익이 대폭 감소해 콘텐츠 수급에 영향을 줄 수 있습니다.</p>
+      </div>
+      <div class="conc-item">
+        <div class="conc-label">옵션 B</div>
+        <h4>종당 연간 상한(Cap) 설정</h4>
+        <p>단가는 현행 유지하되 종당 연간 지급 상한을 설정. 수사실무사례 같은 고사용 저작물의 비용을 제어하면서, 저사용 저작물에는 정상 단가를 보장할 수 있습니다.</p>
+      </div>
+      <div class="conc-item">
+        <div class="conc-label">옵션 C</div>
+        <h4>슬라이딩 단가 구조</h4>
+        <p>등재 종수가 특정 기준(예: 60종, 100종)을 초과하면 단가를 자동으로 하향 조정. 서비스 성장에 연동된 예측 가능한 비용 구조를 구현합니다.</p>
+      </div>
+    </div>
+
+    <div class="callout info" style="margin-top:20px">
+      <div class="c-title">📌 추가 검토 권고사항</div>
+      <p>
+        ① <strong>수사실무사례(21,760건/월)의 급상승 원인 확인</strong> — 일반 패턴인지 특수 사례인지에 따라 기준값이 달라집니다. (BFL은 서울논문학회 소속으로 분석에서 제외)<br>
+        ② 2026년 1월에 등재된 신규 7종은 아직 데이터가 3개월뿐입니다. <strong>6개월 추가 관측 후 기준값 업데이트</strong>를 권장합니다.<br>
+        ③ 사법행정학회와 <strong>6.5억 한도 자체의 재협상 가능성</strong>도 병행 검토를 권장합니다. 스칼라 서비스 성장에 비례해 한도를 상향하는 방안도 있습니다.
+      </p>
+    </div>
+  </div>
+
+  <footer>
+    분석 기준일: 2026년 3월 &nbsp;|&nbsp; 데이터: mart_prod.mart_agg.scholar_settlement_dashboard<br>
+    본 보고서는 내부 검토 용도로 작성되었습니다.
+  </footer>
+
+
+<style>
+  /* ── Simulator ── */
+  .sim-tabs { display:flex; align-items:center; gap:8px; margin-bottom:24px; flex-wrap:wrap; }
+  .sim-tab  {
+    display:flex; align-items:center; gap:6px;
+    padding:7px 16px; border:2px solid var(--border); border-radius:24px;
+    background:white; cursor:pointer; font-size:13px; font-weight:600;
+    color:var(--text); transition:.15s;
+  }
+  .sim-tab:hover { border-color:var(--accent); }
+  .sim-tab.active { border-color:var(--accent); background:var(--accent-light); color:var(--accent); }
+
+  .sim-slider-group { margin-bottom:22px; }
+  .sim-slider-hd  { display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:6px; }
+  .sim-lbl        { font-size:13px; font-weight:600; color:var(--text); }
+  .sim-sublbl     { font-size:11px; color:var(--muted); margin-top:1px; }
+  .sim-price-badge {
+    min-width:54px; text-align:center;
+    font-size:17px; font-weight:800; color:var(--accent);
+    background:var(--accent-light); border-radius:8px; padding:2px 10px;
+    white-space:nowrap;
+  }
+  .sim-slider {
+    -webkit-appearance:none; width:100%; height:6px;
+    border-radius:3px; background:#e5e7eb; outline:none; cursor:pointer;
+  }
+  .sim-slider::-webkit-slider-thumb {
+    -webkit-appearance:none; width:18px; height:18px; border-radius:50%;
+    background:var(--accent); cursor:pointer; border:2px solid white;
+    box-shadow:0 1px 4px rgba(0,0,0,.25);
+  }
+  .sim-slider::-moz-range-thumb {
+    width:18px; height:18px; border-radius:50%;
+    background:var(--accent); cursor:pointer; border:2px solid white;
+  }
+  .sim-marks { display:flex; justify-content:space-between; font-size:10px; color:var(--muted); margin-top:3px; }
+
+  .sim-eff-box {
+    margin-top:20px; padding:14px 18px; background:#f1f5f9; border-radius:8px;
+    border-left:4px solid var(--accent);
+  }
+  .sim-eff-lbl  { font-size:11px; color:var(--muted); font-weight:600; text-transform:uppercase; letter-spacing:.5px; margin-bottom:4px; }
+  .sim-eff-val  { font-size:26px; font-weight:800; color:var(--primary); }
+  .sim-eff-sub  { font-size:11px; color:var(--muted); margin-top:3px; }
+
+  .sim-kpi-grid { display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-bottom:14px; }
+  .sim-kpi      { background:var(--card); border:1px solid var(--border); border-radius:8px; padding:14px 16px; }
+  .sim-kpi.warn { border-color:var(--warn);   background:#fffbeb; }
+  .sim-kpi.dngr { border-color:var(--danger); background:#fff1f2; }
+  .sim-kpi.ok   { border-color:var(--success);background:var(--success-light); }
+  .sim-kpi-lbl  { font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:.5px; color:var(--muted); margin-bottom:4px; }
+  .sim-kpi-val  { font-size:20px; font-weight:800; color:var(--text); }
+  .sim-kpi.warn .sim-kpi-val { color:var(--warn); }
+  .sim-kpi.dngr .sim-kpi-val { color:var(--danger); }
+  .sim-kpi.ok   .sim-kpi-val { color:var(--success); }
+  .sim-kpi-sub  { font-size:11px; color:var(--muted); margin-top:2px; }
+
+  .sim-matrix { width:100%; border-collapse:collapse; font-size:12px; margin-top:14px; }
+  .sim-matrix th { text-align:center; padding:7px 10px; background:#f3f4f6; font-size:11px; font-weight:700; border:1px solid var(--border); }
+  .sim-matrix td { text-align:center; padding:7px 10px; border:1px solid var(--border); }
+  .sim-matrix .pc { font-weight:700; background:#f9fafb; }
+  .sim-matrix .ov { background:#fee2e2; color:#991b1b; font-weight:700; }
+  .sim-matrix .md { background:#fef3c7; color:#92400e; font-weight:700; }
+  .sim-matrix .sf { background:#dcfce7; color:#166534; font-weight:700; }
+
+  @media(max-width:680px){
+    .sim-kpi-grid { grid-template-columns:1fr; }
+  }
+</style>
+
+<hr class="divider">
+
+<!-- ═══════════════ SIMULATOR ═══════════════ -->
+<div class="section" id="s-sim" style="scroll-margin-top:56px">
+  <div class="section-hd">
+    <div class="step-num bg-dark" style="font-size:15px">🔧</div>
+    <div>
+      <div class="section-title">단가 시뮬레이터</div>
+      <div class="section-desc">항목별 단가를 직접 조정하며 시나리오별 저작권료를 실시간으로 확인합니다</div>
+    </div>
+  </div>
+
+  <!-- Scenario tabs -->
+  <div class="sim-tabs">
+    <span style="font-size:12px;font-weight:700;color:var(--muted);margin-right:4px">시나리오</span>
+    <button class="sim-tab" id="stab-p25"    onclick="simScenario('p25')">
+      <span class="tag grn" style="font-size:11px">보수</span> 1,849건/종/월
+    </button>
+    <button class="sim-tab active" id="stab-median" onclick="simScenario('median')">
+      <span class="tag blue" style="font-size:11px">기준</span> 2,235건/종/월
+    </button>
+    <button class="sim-tab" id="stab-p75"    onclick="simScenario('p75')">
+      <span class="tag red" style="font-size:11px">낙관</span> 3,980건/종/월
+    </button>
+  </div>
+
+  <div style="display:grid;grid-template-columns:5fr 6fr;gap:24px;align-items:start">
+
+    <!-- LEFT: price controls -->
+    <div class="card" style="margin-bottom:0">
+      <h4 style="margin-bottom:20px">📐 항목별 단가 설정</h4>
+
+      <!-- AI 노출수 -->
+      <div class="sim-slider-group">
+        <div class="sim-slider-hd">
+          <div>
+            <div class="sim-lbl">AI 노출수</div>
+            <div class="sim-sublbl" id="sr-ai"><code>ai_response_cnt</code> &nbsp;|&nbsp; 로드 중…</div>
+          </div>
+          <div class="sim-price-badge" id="sv-ai">250원</div>
+        </div>
+        <input type="range" class="sim-slider" id="sl-ai" min="30" max="300" step="10" value="250" oninput="simUpdate()">
+        <div class="sim-marks"><span>30원</span><span>165원</span><span>300원</span></div>
+      </div>
+
+      <!-- AI 원문연결 -->
+      <div class="sim-slider-group">
+        <div class="sim-slider-hd">
+          <div>
+            <div class="sim-lbl">AI 원문 연결수</div>
+            <div class="sim-sublbl" id="sr-aipdp"><code>ai_linked_pdp_view_cnt</code> &nbsp;|&nbsp; 로드 중…</div>
+          </div>
+          <div class="sim-price-badge" id="sv-aipdp">250원</div>
+        </div>
+        <input type="range" class="sim-slider" id="sl-aipdp" min="30" max="300" step="10" value="250" oninput="simUpdate()">
+        <div class="sim-marks"><span>30원</span><span>165원</span><span>300원</span></div>
+      </div>
+
+      <!-- 리서치 원문열람 -->
+      <div class="sim-slider-group">
+        <div class="sim-slider-hd">
+          <div>
+            <div class="sim-lbl">리서치 원문열람수</div>
+            <div class="sim-sublbl" id="sr-pdp"><code>total_pdp_view_cnt</code> &nbsp;|&nbsp; 로드 중…</div>
+          </div>
+          <div class="sim-price-badge" id="sv-pdp">250원</div>
+        </div>
+        <input type="range" class="sim-slider" id="sl-pdp" min="30" max="300" step="10" value="250" oninput="simUpdate()">
+        <div class="sim-marks"><span>30원</span><span>165원</span><span>300원</span></div>
+      </div>
+
+      <!-- Effective price -->
+      <div class="sim-eff-box">
+        <div class="sim-eff-lbl">가중평균 환산 단가 (유효 단가)</div>
+        <div class="sim-eff-val" id="sim-eff">—</div>
+        <div class="sim-eff-sub" id="sim-eff-sub">실제 비용 계산에 사용되는 단가입니다</div>
+      </div>
+    </div>
+
+    <!-- RIGHT: results -->
+    <div>
+      <!-- KPI 4-grid -->
+      <div class="sim-kpi-grid">
+        <div class="sim-kpi" id="sk-2026">
+          <div class="sim-kpi-lbl">2026년 예상 연간 저작권료</div>
+          <div class="sim-kpi-val" id="sv-2026">—</div>
+          <div class="sim-kpi-sub" id="ss-2026">—</div>
+        </div>
+        <div class="sim-kpi" id="sk-exceed">
+          <div class="sim-kpi-lbl">6.5억 초과 예상 연도</div>
+          <div class="sim-kpi-val" id="sv-exceed">—</div>
+          <div class="sim-kpi-sub" id="ss-exceed">—</div>
+        </div>
+        <div class="sim-kpi" id="sk-2035">
+          <div class="sim-kpi-lbl">2035년 예상 저작권료</div>
+          <div class="sim-kpi-val" id="sv-2035">—</div>
+          <div class="sim-kpi-sub">연간 누적 398종 기준</div>
+        </div>
+        <div class="sim-kpi" id="sk-ratio">
+          <div class="sim-kpi-lbl">2035년 예산 소진율</div>
+          <div class="sim-kpi-val" id="sv-ratio">—</div>
+          <div class="sim-kpi-sub" id="ss-ratio">—</div>
+        </div>
+      </div>
+
+      <!-- Chart -->
+      <div class="chart-box" style="padding:16px;margin-bottom:14px">
+        <h4 style="font-size:13px;margin-bottom:2px">📊 현재 설정 기준 저작권료 투영 (2026~2038)</h4>
+        <p class="chart-note" id="sim-chart-note">기준 시나리오 · 가중평균 단가 적용</p>
+        <canvas id="sim-chart" style="max-height:230px"></canvas>
+      </div>
+
+      <!-- 세 시나리오 비교 표 -->
+      <div class="card" style="padding:16px;margin-bottom:0">
+        <h4 style="font-size:13px;margin-bottom:10px">📋 세 시나리오 동시 비교 (현재 단가 설정 기준)</h4>
+        <table class="sim-matrix">
+          <thead>
+            <tr>
+              <th>시나리오</th>
+              <th>유효단가</th>
+              <th>2027년</th>
+              <th>2028년</th>
+              <th>2030년</th>
+              <th>2035년</th>
+              <th>초과 시점</th>
+            </tr>
+          </thead>
+          <tbody id="sim-matrix-body"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<hr class="divider">
+
+<!-- ═══════════════ SIMULATOR 2: PER-BOOK QUARTERLY ═══════════════ -->
+<div class="section" id="s-sim2" style="scroll-margin-top:56px">
+  <div class="section-hd">
+    <div class="step-num bg-dark" style="font-size:15px">📊</div>
+    <div>
+      <div class="section-title">종별 분기 정산 시뮬레이터</div>
+      <div class="section-desc">현재 단가 설정 기준 18종 각각의 분기 정산액과 최저 보장 기준 대비 현황을 확인합니다</div>
+    </div>
+  </div>
+
+  <!-- Sync callout -->
+  <div class="callout" style="background:var(--accent-light);border-left:4px solid var(--accent);padding:12px 16px;margin-bottom:20px;border-radius:6px">
+    <strong>💡 위 시뮬레이터와 연동됩니다.</strong>
+    상단 단가 슬라이더를 조정하면 아래 표와 차트가 즉시 업데이트됩니다. 유효 단가 계산 방식도 동일합니다.
+  </div>
+
+  <!-- Threshold + summary row -->
+  <div class="card" style="margin-bottom:16px;padding:16px 20px">
+    <div style="display:flex;align-items:center;gap:24px;flex-wrap:wrap">
+      <div>
+        <div style="font-size:13px;font-weight:700;margin-bottom:3px">📏 분기 최저 보장액 기준</div>
+        <div style="font-size:12px;color:var(--muted)">이 금액 미만인 종은 ⚠️ 표시 및 배경색으로 강조됩니다</div>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px">
+        <input type="number" id="sim2-threshold" value="500000" step="50000" min="0"
+          style="width:140px;padding:6px 10px;border:1.5px solid var(--border);border-radius:6px;font-size:14px;font-weight:700;text-align:right"
+          oninput="sim2Update()">
+        <span style="font-weight:600;font-size:14px">원 / 분기</span>
+      </div>
+      <div id="sim2-summary" style="font-size:14px;margin-left:auto"></div>
+    </div>
+  </div>
+
+  <!-- Per-book table + chart grid -->
+  <div style="display:grid;grid-template-columns:6fr 5fr;gap:20px;align-items:start">
+
+    <!-- LEFT: table -->
+    <div class="card" style="padding:16px;margin-bottom:0;overflow-x:auto">
+      <h4 style="font-size:13px;margin-bottom:4px">📋 종별 분기 정산액 (이용량 기준 종 오름차순)</h4>
+      <div style="font-size:12px;color:var(--muted);margin-bottom:12px" id="sim2-eff-label">유효 단가 —원 · 분기 정산 = 월 이용량 × 3개월 × 유효단가</div>
+      <table class="sim-matrix" style="font-size:12px">
+        <thead>
+          <tr>
+            <th style="width:22px">#</th>
+            <th style="text-align:left">도서명</th>
+            <th>월 이용량</th>
+            <th>분기 정산액</th>
+            <th>기준比</th>
+            <th>판정</th>
+          </tr>
+        </thead>
+        <tbody id="sim2-tbody"></tbody>
+      </table>
+    </div>
+
+    <!-- RIGHT: chart -->
+    <div>
+      <div class="chart-box" style="padding:16px;margin-bottom:0">
+        <h4 style="font-size:13px;margin-bottom:2px">📊 종별 분기 정산액 (최저기준 비교)</h4>
+        <p class="chart-note" id="sim2-chart-note">단가 설정에 따라 자동 업데이트 · 주황 점선 = 최저기준</p>
+        <canvas id="sim2-chart" style="max-height:440px"></canvas>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+</div><!-- /wrap -->
+
+<script>
+// ════════════════════════════════════════
+// RAW DATA
+// ════════════════════════════════════════
+const MONTHLY = [
+  {m:'2025-01', books:5,  ai:23,    aipdp:0,    pdp:141,   total:164},
+  {m:'2025-02', books:5,  ai:11,    aipdp:2,    pdp:308,   total:321},
+  {m:'2025-03', books:5,  ai:246,   aipdp:13,   pdp:244,   total:503},
+  {m:'2025-04', books:5,  ai:4775,  aipdp:156,  pdp:2052,  total:6983},
+  {m:'2025-05', books:5,  ai:8718,  aipdp:353,  pdp:1609,  total:10680},
+  {m:'2025-06', books:8,  ai:12314, aipdp:466,  pdp:1806,  total:14586},
+  {m:'2025-07', books:8,  ai:15853, aipdp:528,  pdp:2555,  total:18936},
+  {m:'2025-08', books:9,  ai:20174, aipdp:996,  pdp:4293,  total:25463},
+  {m:'2025-09', books:10, ai:33558, aipdp:1269, pdp:5442,  total:40269},
+  {m:'2025-10', books:12, ai:25429, aipdp:1403, pdp:10142, total:36974},
+  {m:'2025-11', books:12, ai:50141, aipdp:2004, pdp:11848, total:63993},
+  {m:'2025-12', books:12, ai:87167, aipdp:2043, pdp:10968, total:100178},
+  {m:'2026-01', books:18, ai:77753, aipdp:2455, pdp:10700, total:90908},
+  {m:'2026-02', books:18, ai:63563, aipdp:2635, pdp:9873,  total:76071},
+  {m:'2026-03', books:18, ai:11825, aipdp:530,  pdp:1518,  total:13873},
+];
+
+const BOOKS = [
+  {name:'상속세 법리와 해설',                          date:'2026-01-26', days:38,  moEq:1.25,  total:383,    rate:307,   outlier:false},
+  {name:'AI와 세무',                                   date:'2025-09-24', days:162, moEq:5.32,  total:2428,   rate:456,   outlier:false},
+  {name:'eDiscovery 이해와 위기관리 전략',             date:'2026-01-26', days:38,  moEq:1.25,  total:682,    rate:546,   outlier:false},
+  {name:'군사기밀 보호법',                             date:'2025-10-01', days:155, moEq:5.09,  total:3742,   rate:735,   outlier:false},
+  {name:'하도급법 활용서',                             date:'2025-06-04', days:274, moEq:9.00,  total:15579,  rate:1731,  outlier:false},
+  {name:'헌재주요결정',                                date:'2026-01-26', days:38,  moEq:1.25,  total:2308,   rate:1849,  outlier:false},
+  {name:'대한민국헌법론',                              date:'2026-01-26', days:38,  moEq:1.25,  total:2322,   rate:1860,  outlier:false},
+  {name:'부동산법 설명서',                             date:'2025-06-04', days:274, moEq:9.00,  total:17336,  rate:1926,  outlier:false},
+  {name:'상호저축은행법',                              date:'2025-01-01', days:428, moEq:14.06, total:29054,  rate:2066,  outlier:false},
+  {name:'하도급법 활용서 (신)',                        date:'2026-01-01', days:63,  moEq:2.07,  total:4541,   rate:2194,  outlier:false},
+  {name:'독점규제법 이론과 실무',                      date:'2025-01-01', days:428, moEq:14.06, total:32974,  rate:2345,  outlier:false},
+  {name:'노동조합법과 노사관계 실무',                  date:'2025-01-01', days:428, moEq:14.06, total:37682,  rate:2680,  outlier:false},
+  {name:'건설산업기본법 활용서',                       date:'2025-06-04', days:274, moEq:9.00,  total:31848,  rate:3538,  outlier:false},
+  {name:'수사편람',                                    date:'2025-01-01', days:428, moEq:14.06, total:52022,  rate:3700,  outlier:false},
+  {name:'범죄구성요건 중심의 수사민원 상담매뉴얼',     date:'2026-01-26', days:38,  moEq:1.25,  total:4969,   rate:3980,  outlier:false},
+  {name:'조세법 해설',                                 date:'2026-01-01', days:63,  moEq:2.07,  total:8512,   rate:4112,  outlier:false},
+  {name:'신입 변호사를 위한 업무 단축키',              date:'2025-08-26', days:191, moEq:6.28,  total:30517,  rate:4863,  outlier:false},
+  {name:'근로기준법과 개별관계실무',                   date:'2025-01-01', days:428, moEq:14.06, total:70621,  rate:5022,  outlier:false},
+  {name:'수사실무사례',                                date:'2025-10-01', days:155, moEq:5.09,  total:110810, rate:21760, outlier:true },
+];
+
+// ════════════════════════════════════════
+// MODEL CONSTANTS
+// ════════════════════════════════════════
+const S_BOOKS  = 18;        // 현재 등재 종수 (BFL 제외)
+const PER_YEAR = 40;        // 연간 신규 등재 종수
+const BUDGET   = 650000000;
+const UNIT     = 250;
+const P25      = 1849;
+const MEDIAN   = 2235;
+const P75      = 3980;
+
+function avgBooks(n) { return S_BOOKS + n * PER_YEAR + PER_YEAR / 2; }
+function proj(rate, price, n) { return avgBooks(n) * rate * 12 * price; }
+
+const fmt  = n => n.toLocaleString('ko-KR');
+const fmtW = n => (n / 10000).toFixed(0) + '만원';
+
+// ════════════════════════════════════════
+// CHART 1: Monthly usage bar + royalty line
+// ════════════════════════════════════════
+(function () {
+  const labels = MONTHLY.filter(d => d.m !== '2026-03').map(d => d.m);
+  const data14 = MONTHLY.filter(d => d.m !== '2026-03');
+  const ctx = document.getElementById('chart-monthly').getContext('2d');
+  new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: [
+        { label:'AI 이용수',     data: data14.map(d=>d.ai),    backgroundColor:'#2563eb', stack:'a', yAxisID:'y' },
+        { label:'AI 원문 연결',  data: data14.map(d=>d.aipdp), backgroundColor:'#60a5fa', stack:'a', yAxisID:'y' },
+        { label:'원문 열람',     data: data14.map(d=>d.pdp),   backgroundColor:'#bfdbfe', stack:'a', yAxisID:'y' },
+        {
+          label:'월 저작권료(만원)', type:'line',
+          data: data14.map(d => Math.round(d.total * UNIT / 10000)),
+          borderColor:'#d97706', backgroundColor:'#d9770620',
+          borderWidth:2.5, pointRadius:4, yAxisID:'y2', tension:0.3,
+        },
+      ],
+    },
+    options: {
+      responsive: true,
+      plugins: { legend:{ position:'bottom' } },
+      scales: {
+        y:  { stacked:true, title:{ display:true, text:'사용 건수' }, beginAtZero:true },
+        y2: { position:'right', title:{ display:true, text:'저작권료(만원)' }, beginAtZero:true, grid:{ drawOnChartArea:false } },
+      },
+    },
+  });
+
+  // Monthly table (skip 2026-03 partial)
+  const tbody = document.getElementById('monthly-tbody');
+  MONTHLY.filter(d => d.m !== '2026-03').forEach(d => {
+    const royalty = d.total * UNIT;
+    tbody.innerHTML += `<tr>
+      <td>${d.m}</td>
+      <td class="r">${d.books}</td>
+      <td class="r">${fmt(d.ai)}</td>
+      <td class="r">${fmt(d.aipdp)}</td>
+      <td class="r">${fmt(d.pdp)}</td>
+      <td class="r bold">${fmt(d.total)}</td>
+      <td class="r">${fmtW(royalty)}</td>
+    </tr>`;
+  });
+}());
+
+// ════════════════════════════════════════
+// CHART 2: Per-book normalized rate (horizontal bar)
+// ════════════════════════════════════════
+(function () {
+  const sorted = [...BOOKS].sort((a, b) => a.rate - b.rate);
+  const ctx = document.getElementById('chart-books').getContext('2d');
+  new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels: sorted.map(b => b.outlier ? b.name + ' ⚠' : b.name),
+      datasets: [
+        {
+          label:'월 평균 사용량',
+          data: sorted.map(b => b.rate),
+          backgroundColor: sorted.map(b =>
+            b.outlier      ? '#fca5a5' :
+            b.rate >= P75  ? '#93c5fd' :
+            b.rate >= P25  ? '#bbf7d0' : '#fde68a'
+          ),
+          borderWidth: 0,
+        },
+        { label:`중앙값 ${MEDIAN.toLocaleString()}`,  data:sorted.map(()=>MEDIAN), type:'line', borderColor:'#2563eb', borderWidth:2, borderDash:[5,4], pointRadius:0, fill:false },
+        { label:`P25 ${P25.toLocaleString()}`,        data:sorted.map(()=>P25),    type:'line', borderColor:'#059669', borderWidth:1.5, borderDash:[4,3], pointRadius:0, fill:false },
+        { label:`P75 ${P75.toLocaleString()}`,        data:sorted.map(()=>P75),    type:'line', borderColor:'#d97706', borderWidth:1.5, borderDash:[4,3], pointRadius:0, fill:false },
+      ],
+    },
+    options: {
+      indexAxis: 'y',
+      responsive: true,
+      plugins: { legend:{ position:'bottom', labels:{ filter: item => item.datasetIndex > 0 } } },
+      scales: {
+        x: { title:{ display:true, text:'월 평균 사용량 (건/종/월)' }, beginAtZero:true },
+        y: { ticks:{ font:{ size:11 } } },
+      },
+    },
+  });
+
+  // Books table
+  const tbody = document.getElementById('books-tbody');
+  sorted.forEach(b => {
+    const tier = b.outlier        ? '<span class="tag red">이상치</span>' :
+                 b.rate >= P75   ? '<span class="tag blue">P75+</span>' :
+                 b.rate >= P25   ? '<span class="tag grn">P25~P75</span>' :
+                                   '<span class="tag yel">P25-</span>';
+    tbody.innerHTML += `<tr>
+      <td>${b.name}${b.outlier ? ' <span class="tag red">⚠</span>' : ''}</td>
+      <td>${b.date.slice(0, 7)}</td>
+      <td class="r">${b.moEq}</td>
+      <td class="r">${fmt(b.total)}</td>
+      <td class="r bold">${fmt(b.rate)}</td>
+      <td style="text-align:center">${tier}</td>
+    </tr>`;
+  });
+}());
+
+// ════════════════════════════════════════
+// CHART 3: Distribution scatter
+// ════════════════════════════════════════
+(function () {
+  const rates = BOOKS.map(b => b.rate).sort((a, b) => a - b);
+  const ctx = document.getElementById('chart-dist').getContext('2d');
+  new Chart(ctx, {
+    type: 'scatter',
+    data: {
+      datasets: [
+        {
+          label:'종별 월 평균',
+          data: rates.map((r, i) => ({ x: i + 1, y: r })),
+          backgroundColor: rates.map(r =>
+            r > 10000 ? '#fca5a5' :
+            r >= P75  ? '#93c5fd' :
+            r >= P25  ? '#bbf7d0' : '#fde68a'
+          ),
+          pointRadius: 7, borderWidth: 1, borderColor: '#9ca3af',
+        },
+        { label:`중앙값 ${MEDIAN.toLocaleString()}`, data:rates.map((_,i)=>({x:i+1,y:MEDIAN})), type:'line', borderColor:'#2563eb', borderWidth:2, borderDash:[5,4], pointRadius:0, fill:false },
+        { label:`P25 ${P25.toLocaleString()}`,       data:rates.map((_,i)=>({x:i+1,y:P25})),    type:'line', borderColor:'#059669', borderWidth:1.5, borderDash:[4,3], pointRadius:0, fill:false },
+        { label:`P75 ${P75.toLocaleString()}`,       data:rates.map((_,i)=>({x:i+1,y:P75})),    type:'line', borderColor:'#d97706', borderWidth:1.5, borderDash:[4,3], pointRadius:0, fill:false },
+      ],
+    },
+    options: {
+      responsive: true,
+      plugins: { legend:{ position:'bottom' } },
+      scales: {
+        x: { display: false },
+        y: {
+          title:{ display:true, text:'월 평균 사용량 (건/종/월)' },
+          beginAtZero: true,
+          ticks:{ callback: v => v.toLocaleString() },
+        },
+      },
+    },
+  });
+}());
+
+// ════════════════════════════════════════
+// CHART 4: Projection 2026–2038 (250원 고정)
+// ════════════════════════════════════════
+(function () {
+  const years = Array.from({ length: 13 }, (_, i) => 2026 + i);
+  const ctx = document.getElementById('chart-projection').getContext('2d');
+  new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels: years,
+      datasets: [
+        { label:'낙관 (3,980건)', data:years.map((_,n)=>proj(P75,UNIT,n)/1e8),    borderColor:'#dc2626', backgroundColor:'#dc262620', borderWidth:2,   pointRadius:3, tension:0.3 },
+        { label:'기준 (2,235건)', data:years.map((_,n)=>proj(MEDIAN,UNIT,n)/1e8), borderColor:'#2563eb', backgroundColor:'#2563eb20', borderWidth:2.5, pointRadius:4, tension:0.3 },
+        { label:'보수 (1,849건)', data:years.map((_,n)=>proj(P25,UNIT,n)/1e8),    borderColor:'#059669', backgroundColor:'#05966920', borderWidth:2,   pointRadius:3, tension:0.3 },
+        { label:'6.5억 기준선',   data:years.map(()=>6.5), borderColor:'#dc2626', borderWidth:1.5, borderDash:[6,4], pointRadius:0 },
+      ],
+    },
+    options: {
+      responsive: true,
+      plugins: { legend:{ position:'bottom' } },
+      scales: {
+        y: { title:{ display:true, text:'연간 저작권료 (억원)' }, beginAtZero:true, ticks:{ callback:v=>v.toFixed(1)+'억' } },
+      },
+    },
+  });
+
+  // Projection table (기준 시나리오)
+  const tbody = document.getElementById('proj-tbody');
+  years.forEach((yr, n) => {
+    const books   = avgBooks(n);
+    const usage   = Math.round(books * MEDIAN * 12);
+    const royalty = usage * UNIT;
+    const ratio   = royalty / BUDGET;
+    const over    = royalty >= BUDGET;
+    tbody.innerHTML += `<tr${over ? ' style="background:#fff1f2"' : ''}>
+      <td class="bold">${yr}</td>
+      <td class="r">${Math.round(books)}종</td>
+      <td class="r">${fmt(usage)}</td>
+      <td class="r bold"${over ? ' style="color:var(--danger)"' : ''}>${fmtW(royalty)}</td>
+      <td class="r">${(ratio * 100).toFixed(1)}%</td>
+      <td style="text-align:center"><span class="tag ${over ? 'over' : 'safe'}">${over ? '초과' : '미만'}</span></td>
+    </tr>`;
+  });
+}());
+
+// ════════════════════════════════════════
+// CHART 5: Sensitivity – multi-price lines
+// ════════════════════════════════════════
+(function () {
+  const years   = Array.from({ length: 13 }, (_, i) => 2026 + i);
+  const prices  = [250, 200, 150, 100, 60, 40];
+  const colors  = ['#dc2626', '#f97316', '#eab308', '#22c55e', '#2563eb', '#8b5cf6'];
+  const ctx = document.getElementById('chart-sensitivity').getContext('2d');
+  new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels: years,
+      datasets: [
+        ...prices.map((p, i) => ({
+          label: `${p}원`,
+          data: years.map((_, n) => proj(MEDIAN, p, n) / 1e8),
+          borderColor: colors[i],
+          backgroundColor: colors[i] + '15',
+          borderWidth: p === 60 ? 3 : 1.5,
+          pointRadius: 2,
+          tension: 0.3,
+        })),
+        { label:'6.5억 기준선', data:years.map(()=>6.5), borderColor:'#dc2626', borderWidth:1.5, borderDash:[6,4], pointRadius:0 },
+      ],
+    },
+    options: {
+      responsive: true,
+      plugins: { legend:{ position:'bottom' } },
+      scales: {
+        y: { title:{ display:true, text:'연간 저작권료 (억원)' }, beginAtZero:true, ticks:{ callback:v=>v.toFixed(1)+'억' } },
+      },
+    },
+  });
+}());
+
+// ════════════════════════════════════════
+// Matrix table (단가 × 시나리오)
+// ════════════════════════════════════════
+(function () {
+  const prices = [250, 200, 150, 100, 80, 60, 50, 40, 30, 20, 10];
+  const rates  = [P25, MEDIAN, P75];
+  const tbody  = document.getElementById('matrix-tbody');
+  prices.forEach(p => {
+    const cells = rates.map(r => {
+      for (let n = 0; n <= 29; n++) {
+        if (proj(r, p, n) >= BUDGET) {
+          const yr  = 2026 + n;
+          const cls = yr > 2035 ? 'm-safe' : yr > 2030 ? 'm-mid' : 'm-over';
+          return `<td class="${cls}">${yr}년</td>`;
+        }
+      }
+      return `<td class="m-safe">&gt;2055년</td>`;
+    });
+    tbody.innerHTML += `<tr><td class="price-col">${p}원</td>${cells.join('')}</tr>`;
+  });
+}());
+
+// ════════════════════════════════════════
+// Navigation smooth scroll
+// ════════════════════════════════════════
+document.querySelectorAll('nav.top-nav a[href^="#"]').forEach(link => {
+  link.addEventListener('click', function (e) {
+    e.preventDefault();
+    const el = document.getElementById(this.getAttribute('href').slice(1));
+    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  });
+});
+
+// ════════════════════════════════════════
+// SIMULATOR
+// ════════════════════════════════════════
+(function () {
+  /* 2025 실측 비중 계산 (2026-03 부분월 제외) */
+  const d25  = MONTHLY.filter(d => d.m.startsWith('2025'));
+  const rAI  = d25.reduce((s,d)=>s+d.ai,0);
+  const rAPDP= d25.reduce((s,d)=>s+d.aipdp,0);
+  const rPDP = d25.reduce((s,d)=>s+d.pdp,0);
+  const rAll = rAI + rAPDP + rPDP;
+  const pAI  = rAI   / rAll;
+  const pAPDP= rAPDP / rAll;
+  const pPDP = rPDP  / rAll;
+
+  /* 라벨 업데이트 */
+  document.getElementById('sr-ai').innerHTML    = `<code>ai_response_cnt</code> &nbsp;|&nbsp; 실측 비중 <strong>${(pAI*100).toFixed(1)}%</strong>`;
+  document.getElementById('sr-aipdp').innerHTML = `<code>ai_linked_pdp_view_cnt</code> &nbsp;|&nbsp; 실측 비중 <strong>${(pAPDP*100).toFixed(1)}%</strong>`;
+  document.getElementById('sr-pdp').innerHTML   = `<code>total_pdp_view_cnt</code> &nbsp;|&nbsp; 실측 비중 <strong>${(pPDP*100).toFixed(1)}%</strong>`;
+
+  const SCENARIO_RATES = { p25: P25, median: MEDIAN, p75: P75 };
+  const SCENARIO_NAMES = { p25:'보수(1,849건)', median:'기준(2,235건)', p75:'낙관(3,980건)' };
+  let curScenario = 'median';
+
+  /* 시나리오 전환 */
+  window.simScenario = function (s) {
+    curScenario = s;
+    ['p25','median','p75'].forEach(k => {
+      document.getElementById('stab-'+k).classList.toggle('active', k === s);
+    });
+    simUpdate();
+  };
+
+  /* 투영 함수 (항목별 단가) */
+  function projSim(n, rate, effP) {
+    return avgBooks(n) * rate * 12 * effP;
+  }
+
+  /* Chart 초기화 */
+  const years = Array.from({length:13}, (_,i) => 2026+i);
+  const simCtx = document.getElementById('sim-chart').getContext('2d');
+  const simChartObj = new Chart(simCtx, {
+    type: 'line',
+    data: {
+      labels: years,
+      datasets: [
+        { label:'보수 (1,849건)', data:[], borderColor:'#059669', backgroundColor:'#05966920', borderWidth:2, pointRadius:3, tension:0.3 },
+        { label:'기준 (2,235건)', data:[], borderColor:'#2563eb', backgroundColor:'#2563eb20', borderWidth:2.5, pointRadius:4, tension:0.3 },
+        { label:'낙관 (3,980건)', data:[], borderColor:'#dc2626', backgroundColor:'#dc262620', borderWidth:2, pointRadius:3, tension:0.3 },
+        { label:'6.5억 기준선',   data:years.map(()=>6.5), borderColor:'#dc2626', borderWidth:1.5, borderDash:[6,4], pointRadius:0 },
+      ]
+    },
+    options: {
+      responsive: true,
+      plugins: { legend:{ position:'bottom' } },
+      scales: {
+        y: { title:{ display:true, text:'연간 저작권료 (억원)' }, beginAtZero:true, ticks:{ callback: v => v.toFixed(1)+'억' } }
+      }
+    }
+  });
+
+  /* 메인 업데이트 함수 */
+  window.simUpdate = function () {
+    const priceAI    = +document.getElementById('sl-ai').value;
+    const priceAIPDP = +document.getElementById('sl-aipdp').value;
+    const pricePDP   = +document.getElementById('sl-pdp').value;
+
+    /* 슬라이더 값 표시 */
+    document.getElementById('sv-ai').textContent    = priceAI    + '원';
+    document.getElementById('sv-aipdp').textContent = priceAIPDP + '원';
+    document.getElementById('sv-pdp').textContent   = pricePDP   + '원';
+
+    /* 가중평균 단가 */
+    const effP = pAI * priceAI + pAPDP * priceAIPDP + pPDP * pricePDP;
+    document.getElementById('sim-eff').textContent   = effP.toFixed(1) + '원';
+    document.getElementById('sim-eff-sub').textContent =
+      `AI ${(pAI*100).toFixed(1)}%×${priceAI} + AI연결 ${(pAPDP*100).toFixed(1)}%×${priceAIPDP} + 리서치 ${(pPDP*100).toFixed(1)}%×${pricePDP}`;
+
+    const rate = SCENARIO_RATES[curScenario];
+
+    /* KPI 계산 */
+    const r2026 = projSim(0, rate, effP);
+    const r2035 = projSim(9, rate, effP);
+    const ratio  = r2035 / BUDGET;
+
+    /* 초과 연도 */
+    let crossover = null;
+    for (let n = 0; n <= 29; n++) {
+      if (projSim(n, rate, effP) >= BUDGET) { crossover = 2026 + n; break; }
+    }
+
+    /* KPI 카드 업데이트 */
+    const fmtOk = v => (v / 1e8).toFixed(2) + '억원';
+
+    document.getElementById('sv-2026').textContent = fmtOk(r2026);
+    document.getElementById('ss-2026').textContent = `${SCENARIO_NAMES[curScenario]} 시나리오`;
+
+    if (crossover) {
+      const urgency = crossover <= 2028 ? 'dngr' : crossover <= 2032 ? 'warn' : '';
+      document.getElementById('sk-exceed').className = 'sim-kpi ' + urgency;
+      document.getElementById('sv-exceed').textContent = crossover + '년';
+      document.getElementById('ss-exceed').textContent = crossover <= 2028 ? '⚠️ 2년 내 초과'
+                                                       : crossover <= 2035 ? '⚡ 10년 이내'
+                                                                           : '✅ 10년 이후';
+    } else {
+      document.getElementById('sk-exceed').className = 'sim-kpi ok';
+      document.getElementById('sv-exceed').textContent = '>2055년';
+      document.getElementById('ss-exceed').textContent = '✅ 안전권';
+    }
+
+    document.getElementById('sv-2035').textContent = fmtOk(r2035);
+    const ratioKpi = document.getElementById('sk-ratio');
+    ratioKpi.className = 'sim-kpi ' + (ratio >= 1 ? 'dngr' : ratio >= 0.8 ? 'warn' : 'ok');
+    document.getElementById('sv-ratio').textContent = (ratio * 100).toFixed(1) + '%';
+    document.getElementById('ss-ratio').textContent = ratio >= 1 ? '⚠️ 예산 초과' : ratio >= 0.8 ? '⚡ 위험 수위' : '✅ 예산 내';
+
+    /* 차트 업데이트: 세 시나리오 모두 표시 */
+    simChartObj.data.datasets[0].data = years.map((_,n) => projSim(n, P25,    effP) / 1e8);
+    simChartObj.data.datasets[1].data = years.map((_,n) => projSim(n, MEDIAN, effP) / 1e8);
+    simChartObj.data.datasets[2].data = years.map((_,n) => projSim(n, P75,    effP) / 1e8);
+    document.getElementById('sim-chart-note').textContent =
+      `세 시나리오 비교 · 가중평균 단가 ${effP.toFixed(1)}원 적용`;
+    simChartObj.update();
+
+    /* 비교 매트릭스 */
+    const mYears = [2027, 2028, 2030, 2035];
+    const scenarios = [
+      { key:'p25',    rate:P25,    name:'보수 (1,849건)' },
+      { key:'median', rate:MEDIAN, name:'기준 (2,235건)' },
+      { key:'p75',    rate:P75,    name:'낙관 (3,980건)' },
+    ];
+    const tbody = document.getElementById('sim-matrix-body');
+    tbody.innerHTML = '';
+    scenarios.forEach(sc => {
+      /* crossover for this scenario */
+      let cx = null;
+      for (let n = 0; n <= 29; n++) {
+        if (projSim(n, sc.rate, effP) >= BUDGET) { cx = 2026+n; break; }
+      }
+      const cxTxt = cx ? cx+'년' : '>2055년';
+
+      const cells = mYears.map(yr => {
+        const n = yr - 2026;
+        const v = projSim(n, sc.rate, effP);
+        const pct = (v / BUDGET * 100).toFixed(0);
+        const cls = v >= BUDGET ? 'ov' : v >= BUDGET*0.8 ? 'md' : 'sf';
+        return `<td class="${cls}">${(v/1e8).toFixed(2)}억<br><span style="font-size:10px;font-weight:400">${pct}%</span></td>`;
+      });
+      const cxCls = cx && cx <= 2030 ? 'ov' : cx && cx <= 2035 ? 'md' : 'sf';
+      tbody.innerHTML += `<tr>
+        <td style="font-weight:600;white-space:nowrap">${sc.name}</td>
+        <td style="font-weight:700;color:var(--accent)">${effP.toFixed(1)}원</td>
+        ${cells.join('')}
+        <td class="${cxCls}" style="font-weight:700">${cxTxt}</td>
+      </tr>`;
+    });
+  };
+
+  /* 초기 렌더 */
+  simUpdate();
+}());
+
+// ════════════════════════════════════════
+// SIMULATOR 2: PER-BOOK QUARTERLY
+// ════════════════════════════════════════
+(function () {
+  /* 2025 실측 비중 (첫 번째 시뮬레이터와 동일 계산) */
+  const d25   = MONTHLY.filter(d => d.m.startsWith('2025'));
+  const rAI   = d25.reduce((s,d)=>s+d.ai,0);
+  const rAPDP = d25.reduce((s,d)=>s+d.aipdp,0);
+  const rPDP  = d25.reduce((s,d)=>s+d.pdp,0);
+  const rAll  = rAI + rAPDP + rPDP;
+  const pAI   = rAI   / rAll;
+  const pAPDP = rAPDP / rAll;
+  const pPDP  = rPDP  / rAll;
+
+  /* 아웃라이어 제외 18종 */
+  const books18 = BOOKS.filter(b => !b.outlier);
+
+  let sim2ChartObj = null;
+
+  window.sim2Update = function () {
+    const priceAI    = +document.getElementById('sl-ai').value;
+    const priceAIPDP = +document.getElementById('sl-aipdp').value;
+    const pricePDP   = +document.getElementById('sl-pdp').value;
+
+    /* 가중평균 유효 단가 */
+    const effP      = pAI * priceAI + pAPDP * priceAIPDP + pPDP * pricePDP;
+    const threshold = +(document.getElementById('sim2-threshold').value) || 0;
+
+    document.getElementById('sim2-eff-label').textContent =
+      `유효 단가 ${effP.toFixed(1)}원 (AI ${(pAI*100).toFixed(1)}%×${priceAI} + AI연결 ${(pAPDP*100).toFixed(1)}%×${priceAIPDP} + 리서치 ${(pPDP*100).toFixed(1)}%×${pricePDP}) · 분기 = 월 이용량 × 3 × 유효단가`;
+
+    /* 분기 정산 계산 (월 이용량 오름차순 정렬) */
+    const rows = books18
+      .map(b => ({ ...b, quarterly: b.rate * 3 * effP }))
+      .sort((a, b) => a.quarterly - b.quarterly);
+
+    /* ─ 테이블 렌더 ─ */
+    const tbody = document.getElementById('sim2-tbody');
+    tbody.innerHTML = '';
+    rows.forEach((r, i) => {
+      const pass   = threshold <= 0 || r.quarterly >= threshold;
+      const rowBg  = pass ? '' : 'background:#fff5f5;';
+      const pct    = threshold > 0 ? (r.quarterly / threshold * 100).toFixed(0) + '%' : '—';
+      const q = Math.round(r.quarterly);
+      const qStr   = q >= 10000 ? (q/10000).toFixed(1)+'만원' : q.toLocaleString('ko-KR')+'원';
+      const status = pass
+        ? '<span style="color:#059669;font-weight:700">✅ 충족</span>'
+        : '<span style="color:#dc2626;font-weight:700">⚠️ 미달</span>';
+      tbody.innerHTML += `<tr style="${rowBg}">
+        <td style="color:#9ca3af;font-size:11px;text-align:center">${i+1}</td>
+        <td style="font-size:12px;max-width:180px;word-break:keep-all">${r.name}</td>
+        <td style="text-align:right">${r.rate.toLocaleString('ko-KR')}건</td>
+        <td style="text-align:right;font-weight:700">${qStr}</td>
+        <td style="text-align:right;color:${pass ? '#059669' : '#dc2626'}">${pct}</td>
+        <td style="text-align:center">${status}</td>
+      </tr>`;
+    });
+
+    /* ─ 요약 배지 ─ */
+    const below = rows.filter(r => threshold > 0 && r.quarterly < threshold).length;
+    const above = rows.length - below;
+    const summaryEl = document.getElementById('sim2-summary');
+    summaryEl.innerHTML = below === 0
+      ? `<span style="color:#059669;font-weight:700;font-size:15px">✅ 전 18종 기준 충족</span>`
+      : `<span style="color:#dc2626;font-weight:700;font-size:15px">⚠️ ${below}종 기준 미달</span>` +
+        `<span style="color:#6b7280;font-size:13px;margin-left:8px">/ 충족 ${above}종</span>`;
+
+    /* ─ 차트 ─ */
+    const chartLabels = rows.map(r => r.name.length > 13 ? r.name.slice(0,13)+'…' : r.name);
+    const chartData   = rows.map(r => Math.round(r.quarterly));
+    const chartColors = rows.map(r =>
+      (threshold > 0 && r.quarterly < threshold) ? '#dc262680' : '#2563eb80'
+    );
+    const borderColors = rows.map(r =>
+      (threshold > 0 && r.quarterly < threshold) ? '#dc2626' : '#2563eb'
+    );
+
+    if (!sim2ChartObj) {
+      const ctx = document.getElementById('sim2-chart').getContext('2d');
+      sim2ChartObj = new Chart(ctx, {
+        type: 'bar',
+        data: {
+          labels: chartLabels,
+          datasets: [
+            {
+              label: '분기 정산액',
+              data: chartData,
+              backgroundColor: chartColors,
+              borderColor: borderColors,
+              borderWidth: 1,
+              borderRadius: 3,
+            },
+            {
+              label: '최저 기준선',
+              type: 'line',
+              data: chartLabels.map(() => threshold),
+              borderColor: '#d97706',
+              borderWidth: 2,
+              borderDash: [6, 4],
+              pointRadius: 0,
+              fill: false,
+            },
+          ],
+        },
+        options: {
+          indexAxis: 'y',
+          responsive: true,
+          plugins: { legend: { position: 'bottom' } },
+          scales: {
+            x: {
+              beginAtZero: true,
+              title: { display: true, text: '분기 정산액 (원)' },
+              ticks: { callback: v => v >= 10000 ? (v/10000).toFixed(0)+'만' : v },
+            },
+            y: { ticks: { font: { size: 11 } } },
+          },
+        },
+      });
+    } else {
+      sim2ChartObj.data.labels                         = chartLabels;
+      sim2ChartObj.data.datasets[0].data               = chartData;
+      sim2ChartObj.data.datasets[0].backgroundColor    = chartColors;
+      sim2ChartObj.data.datasets[0].borderColor        = borderColors;
+      sim2ChartObj.data.datasets[1].data               = chartLabels.map(() => threshold);
+      sim2ChartObj.update();
+    }
+  };
+
+  /* 상단 슬라이더 변경 시 자동 연동 */
+  ['sl-ai', 'sl-aipdp', 'sl-pdp'].forEach(id => {
+    document.getElementById(id).addEventListener('input', sim2Update);
+  });
+
+  /* 초기 렌더 */
+  sim2Update();
+}());
+
+</script>
+</div><!-- /report-body -->
+
+
+<script>
+// ════ PASSWORD GATE LOGIC ════
+(function () {
+  // Obfuscated check (not plain text in source)
+  function h(s) {
+    let r = 0;
+    for (let i = 0; i < s.length; i++) r = ((r << 5) - r + s.charCodeAt(i)) | 0;
+    return r;
+  }
+  const TARGET = 2374482762;  // hash of password
+
+  function gateUnlock() {
+    const val = document.getElementById('pw-input').value;
+    const inp = document.getElementById('pw-input');
+    const err = document.getElementById('pw-err');
+    if ((h(val) >>> 0) === TARGET) {
+      document.getElementById('gate').remove();
+      document.getElementById('report-body').style.display = '';
+      sessionStorage.setItem('sa_auth', '1');
+    } else {
+      inp.classList.add('error');
+      err.textContent = '액세스 코드가 올바르지 않습니다. 다시 시도해 주세요.';
+      inp.value = '';
+      setTimeout(() => inp.classList.remove('error'), 400);
+    }
+  }
+  window.gateUnlock = gateUnlock;
+
+  // Auto-pass if already authenticated this session
+  if (sessionStorage.getItem('sa_auth') === '1') {
+    document.getElementById('gate').remove();
+    document.getElementById('report-body').style.display = '';
+  }
+
+  // Focus password input
+  setTimeout(() => { const el = document.getElementById('pw-input'); if(el) el.focus(); }, 100);
+}());
+</script>
+
+</body>
+</html>
